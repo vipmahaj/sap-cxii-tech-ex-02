@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sap-orders-config
+  labels:
+    app: sap-orders
+data:
+  DB_PATH: "/app/data/orders.db"
+  INDEX_PATH: "/app/data/orders.idx"
+  EMBED_MODEL_NAME: "sentence-transformers/all-MiniLM-L6-v2"
+  LLM_MODEL_NAME: "gpt-4o-mini"
+  LLM_CLIENT: "openai"
+  LOG_LEVEL: "INFO"
+  PROMPT_VERSION: "v1"

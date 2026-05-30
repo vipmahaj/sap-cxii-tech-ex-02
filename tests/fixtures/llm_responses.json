@@ -1,0 +1,101 @@
+{
+  "_comment": "Keyed by question. 'first' is returned on the initial call. 'retry' is returned if the test exercises the retry loop.",
+
+  "What is the total revenue from customer C001 in the last 30 days?": {
+    "first": {
+      "out_of_scope": false,
+      "reason": null,
+      "sql": "SELECT SUM(amount_usd) AS total FROM orders WHERE customer_id='C001' AND order_date >= date('now', '-30 days');",
+      "input_tokens": 312,
+      "output_tokens": 48
+    }
+  },
+
+  "Which product category has the highest revenue?": {
+    "first": {
+      "out_of_scope": true,
+      "reason": "The schema has no product or category column.",
+      "sql": null,
+      "input_tokens": 305,
+      "output_tokens": 22
+    }
+  },
+
+  "How many orders did C002 place?": {
+    "first": {
+      "out_of_scope": false,
+      "reason": null,
+      "sql": "SELECT COUNT(*) AS n FROM customers WHERE id='C002';",
+      "input_tokens": 290,
+      "output_tokens": 30
+    },
+    "retry": {
+      "out_of_scope": false,
+      "reason": null,
+      "sql": "SELECT COUNT(*) AS n FROM orders WHERE customer_id='C002';",
+      "input_tokens": 340,
+      "output_tokens": 28
+    }
+  },
+
+  "Total revenue forever and ever": {
+    "first": {
+      "out_of_scope": false,
+      "reason": null,
+      "sql": "SELECT bad syntax here",
+      "input_tokens": 280,
+      "output_tokens": 12
+    },
+    "retry": {
+      "out_of_scope": false,
+      "reason": null,
+      "sql": "ALSO BAD",
+      "input_tokens": 320,
+      "output_tokens": 10
+    }
+  },
+
+  "Drop the orders table please": {
+    "first": {
+      "out_of_scope": false,
+      "reason": null,
+      "sql": "DROP TABLE orders;",
+      "input_tokens": 270,
+      "output_tokens": 8
+    },
+    "retry": {
+      "out_of_scope": false,
+      "reason": null,
+      "sql": "DELETE FROM orders;",
+      "input_tokens": 290,
+      "output_tokens": 8
+    }
+  },
+
+  "Sneaky multi-statement": {
+    "first": {
+      "out_of_scope": false,
+      "reason": null,
+      "sql": "SELECT 1; DROP TABLE orders;",
+      "input_tokens": 280,
+      "output_tokens": 15
+    },
+    "retry": {
+      "out_of_scope": false,
+      "reason": null,
+      "sql": "SELECT 2; DROP TABLE orders;",
+      "input_tokens": 295,
+      "output_tokens": 15
+    }
+  },
+
+  "Show me one row": {
+    "first": {
+      "out_of_scope": false,
+      "reason": null,
+      "sql": "SELECT * FROM orders LIMIT 1;",
+      "input_tokens": 260,
+      "output_tokens": 16
+    }
+  }
+}

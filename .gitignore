@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+
+# Runtime artifacts
+data/*.db
+data/*.idx
+data/*.idx.map.json
+data/*.idx.version
+data/orders.csv
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Local-only files (kept on disk for reference; not shipped to reviewer)
+SUBMISSION.md
+docs/architecture.md
+docs/api-contract.yaml
+docs/data-contract.md
+specs/
+tests/test_search.py

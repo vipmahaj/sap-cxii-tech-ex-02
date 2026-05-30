@@ -1,245 +1,283 @@
-# Technical Exercise — sap-cxii-tech-ex-02
+# sap-cxii-tech-ex-02 — Submission
 
-## Goal
+> **Submitted by:** Vipul Mahajan · **Role:** Development Architect – Application AI Team
+> **Original exercise prompt:** [`EXERCISE.md`](./EXERCISE.md)  ·  **Design docs:** [`docs/`](./docs)  ·  **Part 4 write-up:** [`docs/architecture-multi-tenant.md`](./docs/architecture-multi-tenant.md)
 
-Build a data ETL microservice that ingests customer order data from CSV files, cleans/transforms the data, and exposes it via a simple query API. The emphasis is on data processing, system design, API development, and deployability — not on machine learning.
-
----
-
-## Path by role
-
-This exercise is used for two roles:
-
-- **DS Expert** — complete Parts 1, 2, 3. The Bonus section is optional.
-- **AI Architect** — complete Parts 1, 2, 3, **and Part 4 (AI-augmented query layer + architectural extension, below)**. Skip the Bonus.
-
-Time budget:
-- DS Expert: 3–4 hours
-- AI Architect: 5–6 hours (includes Part 4)
+A small ETL pipeline and REST API for customer order data, with an AI-augmented query layer (NL→SQL + semantic search) and an architectural extension for multi-tenant scale.
 
 ---
 
-## Dataset
+## Quickstart
 
-You will be provided with one or more CSV files using the following schema:
+```bash
+# 1. Install deps
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 
-```csv
-order_id,customer_id,order_date,amount,currency
-1001,C123,2020-01-01,200,USD
-1002,C124,2020-01-02,150,EUR
-...
-```
+# 2. Generate a sample dirty CSV (writes to data/orders.csv)
+python scripts/generate_sample_csv.py
+# Same data every run — seed=42 by default. Use --seed N for variation.
 
-**Notes:**
-- `order_id` is unique.
-- `customer_id` is an alphanumeric ID.
-- `order_date` may have inconsistent formats (YYYY-MM-DD, MM/DD/YYYY, etc.).
-- `amount` may contain invalid or missing values.
-- `currency` may be USD, EUR, or missing.
-
----
-
-## Part 1: ETL Pipeline
-
-### Requirements
-
-#### Extract
-- Load raw CSV(s).
-
-#### Transform
-- Normalize dates into ISO 8601 format (`YYYY-MM-DD`).
-- Convert all amounts into a single currency (e.g., USD) using fixed rates:
-  - 1 EUR = 1.1 USD
-  - 1 USD = 1 USD
-- Handle missing/invalid values:
-  - Drop rows with no `order_id` or `customer_id`.
-  - For missing `amount` → set to 0.
-  - For missing `currency` → assume USD.
-
-#### Load
-- Store cleaned data in either:
-  - SQLite (table: `orders`), or
-  - Parquet/CSV for quick retrieval.
-
-### Deliverable
-
-A script (`etl.py`) that runs:
-
-```sh
+# 3. Run the ETL — populates data/orders.db AND builds the FAISS index.
+#    First run is slow (~30–60s) because sentence-transformers downloads
+#    the MiniLM model (~80 MB) to ~/.cache/huggingface/.
 python etl.py load data/orders.csv
+
+# 4. Start the API
+export OPENAI_API_KEY=sk-...
+uvicorn app:app --reload
+# → http://localhost:8000/docs   (Swagger UI)
 ```
 
-This script should process and persist the cleaned dataset.
+Run the tests (the full suite runs in under 1 second, no API key needed):
+
+```bash
+pytest -v
+# Expected: ~104 passed
+```
+
+Build and run the container:
+
+```bash
+docker build -t sap-orders:latest .
+docker run -p 8000:8000 -e OPENAI_API_KEY=$OPENAI_API_KEY \
+  -v "$PWD/data":/app/data sap-orders:latest
+```
+
+Apply the Kubernetes manifests (dry-run):
+
+```bash
+kubectl apply --dry-run=client -k k8s/
+```
 
 ---
 
-## Part 2: Query API (FastAPI)
+## Worked examples
 
-### Requirements
+Sample requests against a running service with the default sample CSV loaded.
 
-Implement a FastAPI service with these endpoints:
+**1. Deterministic stats**
 
-- `GET /orders/customer/{customer_id}`  
-  Returns all orders for a given customer.
-
-- `GET /orders/stats`  
-  Returns:
-  - `total_revenue` (sum of amounts)
-  - `avg_order_value`
-  - `orders_per_day` (dict keyed by date)
-
-- `GET /orders/recent?days=N`  
-  Returns all orders from the last N days.
-
-- `GET /healthz`  
-  Returns `"ok"` for liveness.
-
-#### Example response
+```bash
+curl -s http://localhost:8000/orders/stats | python3 -m json.tool
+```
 
 ```json
 {
-  "total_revenue": 12345.67,
-  "avg_order_value": 87.5,
-  "orders_per_day": {
-    "2020-01-01": 15,
-    "2020-01-02": 20
-  }
+  "total_revenue": 309788.11,
+  "avg_order_value": 730.63,
+  "orders_per_day": { "2025-05-28": 1, "2025-05-29": 2, "...": "..." }
 }
 ```
 
----
+**2. Natural-language question (real OpenAI call, happy path)**
 
-## Part 3: Deployment
-
-### Requirements
-
-- **Dockerfile:**
-  - Multi-stage build (builder → runtime).
-  - Non-root user.
-  - Expose port 8000.
-  - Include healthcheck.
-
-- **Kubernetes manifests:**
-  - Deployment (with readiness/liveness probes).
-  - Service (ClusterIP).
-  - ConfigMap for configurable parameters (e.g., DB path).
-
----
-
-## Part 4 — AI-Augmented Query Layer + Architectural Extension (AI Architect only)
-
-DS Experts: skip this section and pursue the Bonus items instead.
-
----
-
-### Part 4a — Natural Language Query Endpoint (hands-on, required)
-
-Extend your API with a new endpoint:
-
-```
-POST /orders/ask
-Content-Type: application/json
-
-{"question": "What is the total revenue from customer C001 in the last 30 days?"}
-
-→ {"answer": "Total revenue: $4,230.00 (3 orders)", "sql_used": "SELECT ...", "rows": [...]}
+```bash
+curl -s -X POST http://localhost:8000/orders/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the total revenue across all orders?"}' \
+  | python3 -m json.tool
 ```
 
-Use an LLM of your choice (OpenAI, Anthropic, a local Ollama model — justify your pick in the README) to convert the natural language question into SQL, execute it against your existing SQLite/Parquet store, and return both the natural-language answer and the SQL used.
-
-**Requirements:**
-
-- The LLM must receive the database schema as context in its system prompt (column names and types from Part 1).
-- If the generated SQL is invalid or returns a runtime error, retry **once** with the error message appended to the prompt — implement this retry loop explicitly.
-- Return `400` with a clear message if the question cannot be answered from the available schema (e.g. asks about product categories that do not exist).
-- Log the prompt, generated SQL, and token count for each request.
-
-**In your README, document:**
-- Which model and provider you chose and why.
-- The system prompt template you used (paste it).
-- One example where the retry loop fired: what the bad SQL was, what error it produced, and what the corrected SQL looked like.
-
----
-
-### Part 4b — Semantic Order Search (hands-on, required)
-
-Add a second new endpoint:
-
-```
-GET /orders/semantic_search?q=high+value+recent+orders&top_k=5
-→ [{"order_id": "...", "customer_id": "...", "amount_usd": 320.0, "order_date": "2024-03-15", "score": 0.91}, ...]
+```json
+{
+  "answer": "total_revenue: $309,788.11",
+  "sql_used": "SELECT SUM(amount_usd) AS total_revenue FROM orders;",
+  "rows": [{"total_revenue": 309788.114}],
+  "retry_count": 0,
+  "token_count": 303
+}
 ```
 
-**Implementation:**
+**3. Out-of-scope question → 400 (real OpenAI call)**
 
-- At service startup, embed each order record as a short text string (e.g. `"customer C001, $320 USD, 2024-03-15"`) using `sentence-transformers` — name the model you chose and justify it.
-- Store embeddings in a FAISS index (or in-memory numpy — explain the trade-off).
-- At query time, embed the free-text query with the same model and return the top-k nearest orders by cosine similarity.
-- The index must rebuild automatically when `etl.py` loads new data.
+```bash
+curl -s -i -X POST http://localhost:8000/orders/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What product categories sold best last quarter?"}'
+```
 
-**In your README, document:**
-- The embedding model and why it suits short structured-text records.
-- How you handle index rebuilds without blocking in-flight requests (or acknowledge the gap if you do not).
+```
+HTTP/1.1 400 Bad Request
+{"detail":"Out of scope: The database does not contain product or category information."}
+```
 
----
+**4. Retry loop fires (fixture mode — deterministic)**
 
-### Part 4c — Bonus: LangGraph Agent
+Set `LLM_CLIENT=fixture` then ask the canned retry question. The first SQL the fixture returns references a non-existent `customers` table; the orchestrator retries with the error appended, the second SQL references the real `orders` table, and the result returns with `retry_count: 1`. Full trace in [`docs/ai-layer.md` §1.5b](./docs/ai-layer.md#15b-canonical-retry-trace-part-4a-requirement).
 
-Replace the single-shot LLM call in Part 4a with a two-node LangGraph agent:
+```bash
+export LLM_CLIENT=fixture
+uvicorn app:app --reload
 
-- **Node `sql_writer`:** generates SQL from the question + schema.
-- **Node `sql_executor`:** runs the SQL; on failure routes back to `sql_writer` with the error appended (up to 2 retries), then routes to `END` on success.
+# In another terminal
+curl -s -X POST http://localhost:8000/orders/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "How many orders did C002 place?"}' \
+  | python3 -m json.tool
+```
 
-Show the graph definition and include a trace of one multi-hop execution in your README: question → bad SQL → error → corrected SQL → answer.
+```json
+{
+  "answer": "n: 10",
+  "sql_used": "SELECT COUNT(*) AS n FROM orders WHERE customer_id='C002';",
+  "rows": [{"n": 10}],
+  "retry_count": 1,
+  "token_count": 688
+}
+```
 
----
+**5. Semantic search**
 
-### Part 4d — Architectural Extension (write-up, ≤ 1 page, required)
+```bash
+curl -s "http://localhost:8000/orders/semantic_search?q=large+EUR+order&top_k=3" \
+  | python3 -m json.tool
+```
 
-You now have a service with three AI components: an LLM call, an embedding model, and a vector index. Scale it to **50 enterprise customers**, each with their own data residency requirement (EU in eu-west, US in us-east, KSA on local cloud).
-
-Address the following — diagrams welcome:
-
-1. **Tenant isolation for the vector index** — one shared FAISS index with namespace filtering, or one index per tenant? What are the memory, latency, and data-leakage trade-offs?
-2. **LLM backend per tenant** — some enterprise customers will require an on-premise model (e.g. a private Llama deployment) rather than a cloud API. Where in the stack does that routing live, and how do you keep the prompt template layer model-agnostic?
-3. **PII in the NL→SQL pipeline** — order data contains customer IDs and amounts. What guardrails do you add before the question and schema reach the LLM, and does your answer change if the LLM is a third-party cloud API vs. on-premise?
-4. **One specific decision** — pick the highest-leverage architectural choice you made above and state the trade-off you accepted.
-
-We are NOT asking you to implement the multi-tenant design. We are looking for architect-grade reasoning in writing.
-
----
-
-## Bonus (Optional — DS Expert path only)
-
-### Metrics
-
-- Expose `/metrics` in Prometheus format with counters (requests, errors, processing time).
-
-### Caching
-
-- Cache results of `/orders/stats` in memory (e.g., TTL = 60 seconds).
-
-### CLI
-
-- Add subcommands to `etl.py`:
-  - `python etl.py show-stats` → print revenue/avg order.
-
----
-
-## Assumptions
-
-- CSVs are well-formed (one row per line).
-- Order IDs are unique.
-- Any Python libraries may be used (e.g., `pandas`, `sqlite3`, `fastapi`, `uvicorn`, `sentence-transformers`, `faiss-cpu`, `langchain`, `langgraph`, etc.).
+```json
+[
+  {"order_id": "10239", "customer_id": "C014", "order_date": "2025-08-12",
+   "amount_usd": 1083.41, "currency": "EUR", "score": 0.71},
+  {"order_id": "10044", "customer_id": "C022", "order_date": "2025-09-30",
+   "amount_usd": 921.04, "currency": "EUR", "score": 0.68},
+  "..."
+]
+```
 
 ---
 
-## Deliverables
+## Repository layout
 
-Code in a GitHub repo or zip file with:
+```
+.
+├── README.md              this file — submission overview
+├── EXERCISE.md            original prompt as received
+├── etl.py                 CLI: python etl.py load <csv>
+├── app.py                 FastAPI service
+├── orders/                internal package — see orders/__init__.py
+├── tests/                 pytest suite (~104 tests, runs without an API key)
+├── docs/                  AI-layer spec, ADRs, Part 4d write-up
+├── k8s/                   Deployment, Service, ConfigMap
+├── data/                  runtime data (DB + FAISS index); gitignored
+├── Dockerfile             multi-stage, non-root, port 8000
+└── requirements.txt
+```
 
-- `etl.py`
-- `app.py` (FastAPI service)
-- `Dockerfile`
-- `k8s/` folder with manifests
-- `README.md` with setup instructions, design notes, and Part 4 write-up
+---
+
+## Design docs
+
+Deep design lives in two short files; everything else is in this README or in code docstrings.
+
+1. **[docs/ai-layer.md](./docs/ai-layer.md)** — LLM choice rationale, system prompt verbatim, retry policy, FAISS lifecycle, client testability.
+2. **[docs/decisions.md](./docs/decisions.md)** — seven ADRs covering every non-obvious choice and the trade-off accepted.
+
+The Part 4d architectural extension is in [docs/architecture-multi-tenant.md](./docs/architecture-multi-tenant.md) (linked from the top callout).
+
+A live OpenAPI 3.1 spec is auto-generated by FastAPI and visible at `http://localhost:8000/docs` once the service is running.
+
+---
+
+## Part 4 deliverables
+
+| Sub-part | Where to find it |
+|----------|------------------|
+| 4a — NL→SQL endpoint | `POST /orders/ask` in `app.py`; spec in `docs/ai-layer.md` §1. |
+| 4a — system prompt | `orders/prompts.py`; reproduced in `docs/ai-layer.md` §1.3. |
+| 4a — retry trace example | Documented below in [Part 4 design notes](#part-4-design-notes); see `tests/fixtures/llm_responses.json` for the canonical example. |
+| 4b — semantic search | `GET /orders/semantic_search`; embedding model + FAISS lifecycle in `docs/ai-layer.md` §2. |
+| 4c — LangGraph bonus | Skipped (optional). |
+| 4d — multi-tenant write-up | [`docs/architecture-multi-tenant.md`](./docs/architecture-multi-tenant.md). |
+
+---
+
+## Part 4 design notes
+
+This section satisfies the "in your README, document…" requirements in `EXERCISE.md` for Parts 4a and 4b. Deeper rationale and ADRs live in [`docs/ai-layer.md`](./docs/ai-layer.md) and [`docs/decisions.md`](./docs/decisions.md).
+
+### Part 4a — Model choice
+
+OpenAI **`gpt-4o-mini`** via the chat completions API with `response_format={"type": "json_object"}`. Three reasons:
+
+1. **Cost.** ~$0.15 per million input tokens makes each `/orders/ask` call a fraction of a cent. The full suite of ~10 calls in the worked examples below costs under one US cent.
+2. **Native JSON mode.** Removes a class of fragile string parsing. The model returns a strict envelope `{out_of_scope, reason, sql}` we can `json.loads` directly.
+3. **Quality at narrow tasks.** For a five-column SQLite schema, `gpt-4o-mini` matches `gpt-4o` on NL→SQL accuracy at a fraction of the cost.
+
+The model choice is hidden behind an `LlmClient` Protocol in [`orders/llm.py`](./orders/llm.py). Swapping to Anthropic Claude or a local Llama endpoint is a single-file change; see ADR-002 in [`docs/decisions.md`](./docs/decisions.md).
+
+### Part 4a — System prompt (verbatim)
+
+The prompt below is the literal `SYSTEM_PROMPT` constant in [`orders/prompts.py`](./orders/prompts.py). The version is tracked in `PROMPT_VERSION` and a SHA256 prefix is logged with every request so behaviour changes are traceable even without a version bump.
+
+```
+You convert natural-language questions about a customer-order database
+into a single SQLite query.
+
+The database has exactly one table:
+
+Table: orders
+Columns:
+  order_id     TEXT    primary key, opaque string
+  customer_id  TEXT    opaque string, e.g. "C001"
+  order_date   TEXT    ISO 8601 date string, format YYYY-MM-DD
+  amount_usd   REAL    already in USD, no other currencies present
+  currency     TEXT    original currency for provenance only
+
+Rules:
+- Use only SQLite syntax.
+- Use only the columns and table listed above. Do not invent columns.
+- All amounts are already in USD; do not multiply by exchange rates.
+- For relative dates, use SQLite functions like date('now', '-30 days').
+- If the question cannot be answered from these columns, respond with
+  out_of_scope=true and a short reason.
+
+Respond ONLY with JSON matching this schema:
+{
+  "out_of_scope": boolean,
+  "reason": string | null,
+  "sql": string | null
+}
+
+When out_of_scope is true, sql must be null.
+When out_of_scope is false, sql must be a single SELECT statement and
+reason must be null.
+```
+
+On retry, the orchestrator appends one corrective user-role message: `Your previous SQL failed with: <error>. The bad SQL was: <sql>. Generate a corrected SQL query.` See `orders/prompts.py::retry_user_message`.
+
+### Part 4a — Retry-loop example
+
+See [Worked examples §4](#worked-examples) above for the runnable retry case. The full step-by-step trace (question → bad SQL → SQLite error → corrective turn → corrected SQL → success → HTTP response) is in [`docs/ai-layer.md` §1.5b](./docs/ai-layer.md).
+
+### Part 4b — Embedding model
+
+**`sentence-transformers/all-MiniLM-L6-v2`**. Justification for short structured-text records:
+
+- **Size.** 22 MB on disk, ~80 MB resident. Ships in the container without a GPU; sub-20 ms query-time encoding on CPU.
+- **Trained for sentence-level similarity.** Our embedding template is ~15 tokens per order (`order {id}: customer {cid} spent ${amt} USD on {date}`). MiniLM is calibrated for this length; larger models like `all-mpnet-base-v2` (768d vs 384d) gain little when the input is this constrained.
+- **Stable, widely deployed.** Apache 2.0 licensed, no PII implications, and reproducible across machines.
+
+Full ADR in [`docs/decisions.md ADR-004`](./docs/decisions.md).
+
+### Part 4b — Index rebuild without blocking in-flight requests
+
+`etl.py load` is the sole writer of the FAISS index. After upserting cleaned rows into SQLite, `orders.search.rebuild_from_db` encodes every order, builds an `IndexFlatIP`, and persists three files (`.idx`, `.map.json`, `.version`) using `write_tmp → fsync → atomic rename`. On POSIX the rename is atomic, so a concurrent reader either sees the old set of files or the new set, never half of each.
+
+The API never writes the index; it only reads. `orders.search.get_or_load_index` caches the loaded `IndexBundle` in memory keyed by the `.idx` file's mtime. When `os.path.getmtime` returns a value different from the cached one (i.e. ETL has written a new index), the next request reloads the bundle transparently — no uvicorn restart, no blocked endpoint. In-flight requests continue against the previously-loaded bundle until they complete.
+
+The race window is bounded by a single `threading.Lock` so concurrent reads don't both decide to reload at once. The "Plan B" double-buffer pattern for online ingest is documented but not implemented; see [`docs/ai-layer.md` §2.4](./docs/ai-layer.md).
+
+---
+
+## Environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DB_PATH` | `./data/orders.db` | SQLite file |
+| `INDEX_PATH` | `./data/orders.idx` | FAISS index file |
+| `EMBED_MODEL_NAME` | `sentence-transformers/all-MiniLM-L6-v2` | Embedding model |
+| `LLM_MODEL_NAME` | `gpt-4o-mini` | OpenAI model |
+| `LLM_CLIENT` | `openai` | `openai` or `fixture` (tests) |
+| `OPENAI_API_KEY` | — | Required when `LLM_CLIENT=openai` |
+| `LOG_LEVEL` | `INFO` | |
+| `PROMPT_VERSION` | `v1` | Bumped when system prompt changes |
